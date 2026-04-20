@@ -43,8 +43,10 @@ export async function POST(req: NextRequest) {
     await store.set(key, data, { ex: 300 });
 
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("POST /api/signal error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
@@ -67,7 +69,9 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({ data });
-  } catch {
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("GET /api/signal error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
