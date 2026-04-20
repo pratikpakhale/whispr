@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
 
-let kv: { get: (key: string) => Promise<string | null>; set: (key: string, value: string, options?: { ex?: number }) => Promise<void> } | null = null;
 const memoryStore = new Map<string, { value: string; expires: number }>();
 
-async function getStore() {
-  if (kv) return kv;
-
+function getStore() {
   if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-    try {
-      const vercelKv = await import("@vercel/kv");
-      kv = vercelKv.kv as unknown as typeof kv;
-      return kv;
-    } catch {
-      // fall through to in-memory
-    }
+    return new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
   }
-
-  kv = {
-    async get(key: string) {
+  // Local dev fallback (in-memory, single process only)
+  return {
+    async get(key: string): Promise<string | null> {
       const entry = memoryStore.get(key);
       if (!entry) return null;
       if (Date.now() > entry.expires) {
@@ -26,12 +21,11 @@ async function getStore() {
       }
       return entry.value;
     },
-    async set(key: string, value: string, options?: { ex?: number }) {
-      const ttl = (options?.ex ?? 120) * 1000;
+    async set(key: string, value: string, options?: { ex: number }): Promise<void> {
+      const ttl = (options?.ex ?? 300) * 1000;
       memoryStore.set(key, { value, expires: Date.now() + ttl });
     },
   };
-  return kv;
 }
 
 export async function POST(req: NextRequest) {
@@ -44,9 +38,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
-    const store = await getStore();
+    const store = getStore();
     const key = `whispr:${roomId}:${role}`;
-    await store!.set(key, data, { ex: 300 });
+    await store.set(key, data, { ex: 300 });
 
     return NextResponse.json({ ok: true });
   } catch {
@@ -64,9 +58,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Missing params" }, { status: 400 });
     }
 
-    const store = await getStore();
+    const store = getStore();
     const key = `whispr:${roomId}:${role}`;
-    const data = await store!.get(key);
+    const data = await store.get(key);
 
     if (!data) {
       return NextResponse.json({ data: null }, { status: 404 });
