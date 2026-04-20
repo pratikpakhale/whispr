@@ -13,6 +13,10 @@ export async function sendSignal(
   if (!res.ok) throw new Error(`Signal send failed: ${res.status}`);
 }
 
+export async function clearSignals(roomId: string): Promise<void> {
+  await fetch(`/api/signal?roomId=${encodeURIComponent(roomId)}`, { method: "DELETE" });
+}
+
 export async function pollSignal(
   roomId: string,
   role: SignalRole

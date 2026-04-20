@@ -50,6 +50,18 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const roomId = searchParams.get("roomId");
+  if (!roomId) return NextResponse.json({ error: "Missing roomId" }, { status: 400 });
+  const store = getStore();
+  await Promise.all([
+    store.set(`whispr:${roomId}:offer`, "", { ex: 1 }),
+    store.set(`whispr:${roomId}:answer`, "", { ex: 1 }),
+  ]);
+  return NextResponse.json({ ok: true });
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

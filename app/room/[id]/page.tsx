@@ -11,7 +11,7 @@ import {
   deriveKeyFromPassphrase,
   decryptRoomKey,
 } from "@/lib/crypto";
-import { sendSignal, pollSignal } from "@/lib/signal";
+import { sendSignal, pollSignal, clearSignals } from "@/lib/signal";
 import {
   createPeerConnection,
   createDataChannel,
@@ -19,9 +19,34 @@ import {
   createOffer,
   createAnswer,
   acceptAnswer,
+  getIceServers,
+  addMediaStream,
+  removeMediaTracks,
+  setupRenegotiation,
   type ConnectionState,
   type PeerCallbacks,
 } from "@/lib/webrtc";
+import { cn } from "@/lib/utils";
+import {
+  ShieldCheck,
+  Lock,
+  Send,
+  Paperclip,
+  File as FileIcon,
+  Video,
+  VideoOff,
+  Mic,
+  MicOff,
+  Camera,
+  PhoneOff,
+  Copy,
+  Check,
+  RotateCcw,
+  LogOut,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 
 interface ChatMessage {
   id: string;
@@ -65,6 +90,13 @@ export default function RoomPage() {
   const encFragmentRef = useRef<{ encryptedKey: string; salt: string } | null>(null);
   const [isPassphraseProtected, setIsPassphraseProtected] = useState(false);
 
+  // Video call state
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [inCall, setInCall] = useState(false);
+  const [videoEnabled, setVideoEnabled] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -72,6 +104,8 @@ export default function RoomPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingFilesRef = useRef<Map<string, FileTransfer>>(new Map());
   const keyRef = useRef<CryptoKey | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
 
   const addMessage = useCallback((msg: ChatMessage) => {
     setMessages((prev) => [...prev, msg]);
@@ -148,6 +182,54 @@ export default function RoomPage() {
             fileSize: transfer.size,
             fileUrl: url,
           });
+        } else if (parsed.type === "video-offer") {
+          const pc = pcRef.current;
+          if (!pc) return;
+          try {
+            // 1. Acquire local media
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            // 2. Set local stream and inCall state
+            setLocalStream(stream);
+            setInCall(true);
+            // 3. Add local tracks to PC BEFORE setRemoteDescription
+            addMediaStream(pc, stream);
+            // 4. Set remote description, create and send answer
+            await pc.setRemoteDescription(new RTCSessionDescription(parsed.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            // Wait for ICE gathering
+            await new Promise<void>((resolve) => {
+              if (pc.iceGatheringState === "complete") { resolve(); return; }
+              const t = setTimeout(resolve, 3000);
+              pc.onicegatheringstatechange = () => {
+                if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
+              };
+            });
+            const answerMsg = await encrypt(key, JSON.stringify({
+              type: "video-answer",
+              sdp: pc.localDescription!,
+            }));
+            dcRef.current?.send(answerMsg);
+          } catch (e) {
+            console.error("Failed to handle video offer:", e);
+          }
+        } else if (parsed.type === "video-answer") {
+          const pc = pcRef.current;
+          if (!pc) return;
+          await acceptAnswer(pc, parsed.sdp);
+        } else if (parsed.type === "video-stop") {
+          // Clear remote video
+          setRemoteStream(null);
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = null;
+          }
+          // Stop local tracks via PC senders and clean up
+          if (pcRef.current) removeMediaTracks(pcRef.current);
+          setLocalStream(null);
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = null;
+          }
+          setInCall(false);
         }
       } catch (e) {
         console.error("Failed to decrypt message:", e);
@@ -192,11 +274,24 @@ export default function RoomPage() {
         onStateChange: setConnectionState,
       };
 
+      const iceServers = await getIceServers();
+
       if (isCreatorRole) {
-        // Creator: make offer immediately, poll for answer
+        // Creator: clear stale signals before posting new offer
+        await clearSignals(roomId);
         setConnectionState("waiting");
-        const pc = createPeerConnection(callbacks);
+        const pc = createPeerConnection(callbacks, iceServers);
         pcRef.current = pc;
+
+        pc.ontrack = (e) => {
+          if (e.streams && e.streams[0]) {
+            setRemoteStream(e.streams[0]);
+          } else {
+            const stream = new MediaStream([e.track]);
+            setRemoteStream(stream);
+          }
+        };
+
         dcRef.current = createDataChannel(pc, callbacks);
 
         const offer = await createOffer(pc);
@@ -204,53 +299,97 @@ export default function RoomPage() {
         await sendSignal(roomId, "offer", encryptedOffer);
 
         let attempts = 0;
+        let processing = false;
         pollRef.current = setInterval(async () => {
+          if (processing) return;
           attempts++;
           if (attempts > 60) {
             clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setConnectionState("disconnected");
             return;
           }
-          const answerData = await pollSignal(roomId, "answer");
-          if (answerData) {
+          try {
+            const answerData = await pollSignal(roomId, "answer");
+            if (answerData) {
+              processing = true;
+              clearInterval(pollRef.current!);
+              pollRef.current = null;
+              setConnectionState("connecting");
+              const decryptedAnswer = JSON.parse(await decrypt(key, answerData));
+              await acceptAnswer(pc, decryptedAnswer);
+            }
+          } catch (e) {
+            console.error("Failed to process answer:", e);
             clearInterval(pollRef.current!);
             pollRef.current = null;
-            setConnectionState("connecting");
-            const decryptedAnswer = JSON.parse(await decrypt(key, answerData));
-            await acceptAnswer(pc, decryptedAnswer);
+            setConnectionState("disconnected");
           }
         }, 1500);
       } else {
         // Joiner: poll for offer, then answer
         setConnectionState("waiting");
-        const pc = createPeerConnection(callbacks);
+        const pc = createPeerConnection(callbacks, iceServers);
         pcRef.current = pc;
+
+        pc.ontrack = (e) => {
+          if (e.streams && e.streams[0]) {
+            setRemoteStream(e.streams[0]);
+          } else {
+            const stream = new MediaStream([e.track]);
+            setRemoteStream(stream);
+          }
+        };
+
         pc.ondatachannel = (e) => {
           dcRef.current = e.channel;
           setupDataChannel(e.channel, callbacks);
         };
 
         let attempts = 0;
+        let processing = false;
         pollRef.current = setInterval(async () => {
+          if (processing) return;
           attempts++;
           if (attempts > 60) {
             clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setConnectionState("disconnected");
             return;
           }
-          const offerData = await pollSignal(roomId, "offer");
-          if (offerData) {
+          try {
+            const offerData = await pollSignal(roomId, "offer");
+            if (offerData) {
+              processing = true;
+              clearInterval(pollRef.current!);
+              pollRef.current = null;
+              setConnectionState("connecting");
+              const decryptedOffer = JSON.parse(await decrypt(key, offerData));
+              const answer = await createAnswer(pc, decryptedOffer);
+              const encryptedAnswer = await encrypt(key, JSON.stringify(answer));
+              await sendSignal(roomId, "answer", encryptedAnswer);
+            }
+          } catch (e) {
+            console.error("Failed to process offer:", e);
             clearInterval(pollRef.current!);
             pollRef.current = null;
-            setConnectionState("connecting");
-            const decryptedOffer = JSON.parse(await decrypt(key, offerData));
-            const answer = await createAnswer(pc, decryptedOffer);
-            const encryptedAnswer = await encrypt(key, JSON.stringify(answer));
-            await sendSignal(roomId, "answer", encryptedAnswer);
+            setConnectionState("disconnected");
           }
         }, 1500);
       }
     },
     [roomId, handlePeerMessage, handleBinaryMessage]
   );
+
+  const reconnect = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pcRef.current?.close();
+    pcRef.current = null;
+    dcRef.current = null;
+    setConnectionState("idle");
+    setMessages([]);
+    if (keyRef.current) startConnection(keyRef.current);
+  }, [startConnection]);
 
   useEffect(() => {
     if (!cryptoKey) return;
@@ -261,6 +400,10 @@ export default function RoomPage() {
       pcRef.current?.close();
     };
   }, [cryptoKey, startConnection]);
+
+  useEffect(() => {
+    document.title = "Room \u00b7 whispr";
+  }, []);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -376,6 +519,107 @@ export default function RoomPage() {
     }
   }
 
+  // Assign video streams to refs
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
+  // Cleanup local stream on unmount
+  useEffect(() => {
+    return () => {
+      localStream?.getTracks().forEach((t) => t.stop());
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function startVideoCall() {
+    const pc = pcRef.current;
+    const dc = dcRef.current;
+    const key = keyRef.current;
+    if (!pc || !dc || dc.readyState !== "open" || !key) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLocalStream(stream);
+      addMediaStream(pc, stream);
+      setInCall(true);
+
+      setupRenegotiation(pc, async (offer) => {
+        const msg = await encrypt(key, JSON.stringify({ type: "video-offer", sdp: offer }));
+        dc.send(msg);
+      });
+    } catch (e) {
+      console.error("Failed to start video call:", e);
+    }
+  }
+
+  async function stopVideoCall() {
+    const pc = pcRef.current;
+    const dc = dcRef.current;
+    const key = keyRef.current;
+
+    if (localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+      setLocalStream(null);
+    }
+
+    if (pc) removeMediaTracks(pc);
+
+    if (dc && dc.readyState === "open" && key) {
+      const msg = await encrypt(key, JSON.stringify({ type: "video-stop" }));
+      dc.send(msg);
+    }
+
+    setRemoteStream(null);
+    setInCall(false);
+    setVideoEnabled(true);
+    setAudioEnabled(true);
+  }
+
+  function toggleVideo() {
+    if (!localStream) return;
+    const enabled = !videoEnabled;
+    localStream.getVideoTracks().forEach((t) => (t.enabled = enabled));
+    setVideoEnabled(enabled);
+  }
+
+  function toggleAudio() {
+    if (!localStream) return;
+    const enabled = !audioEnabled;
+    localStream.getAudioTracks().forEach((t) => (t.enabled = enabled));
+    setAudioEnabled(enabled);
+  }
+
+  async function captureAndSendPhoto() {
+    const video = localVideoRef.current;
+    if (!video || !cryptoKey) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0);
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+        sendFile(file);
+      },
+      "image/jpeg",
+      0.85
+    );
+  }
+
   function copyLink() {
     const url = new URL(window.location.href);
     url.searchParams.delete("role");
@@ -397,24 +641,22 @@ export default function RoomPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  // --- Passphrase screen ---
   if (needsPassphrase) {
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
+      <main className="min-h-[100dvh] flex items-center justify-center px-4">
         <div className="max-w-sm w-full space-y-6 animate-fade-in">
-          <div className="text-center space-y-2">
-            <div className="flex justify-center mb-4">
-              <div className="w-12 h-12 rounded-full bg-whispr-accent/10 flex items-center justify-center">
-                <ShieldLockIcon />
-              </div>
+          <div className="text-center space-y-3">
+            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+              <ShieldCheck className="w-6 h-6 text-primary" />
             </div>
-            <h2 className="text-xl font-medium">Passphrase Required</h2>
-            <p className="text-whispr-muted text-sm">
-              This room is passphrase-protected. Enter the passphrase to join.
+            <h2 className="text-xl font-medium tracking-tight">Passphrase Required</h2>
+            <p className="text-sm text-muted-foreground">
+              This room is protected. Enter the passphrase to join.
             </p>
           </div>
-
           <div className="space-y-3">
-            <input
+            <Input
               type="password"
               value={passphraseInput}
               onChange={(e) => {
@@ -424,34 +666,31 @@ export default function RoomPage() {
               onKeyDown={(e) => e.key === "Enter" && handlePassphraseSubmit()}
               placeholder="Enter passphrase"
               autoFocus
-              className="w-full bg-whispr-surface border border-whispr-border rounded-lg px-4 py-3 text-sm
-                         placeholder:text-whispr-muted/50 focus:outline-none focus:border-whispr-accent/50
-                         transition-colors"
+              className="h-11"
             />
             {passphraseError && (
-              <p className="text-whispr-red text-sm text-center">{passphraseError}</p>
+              <p className="text-sm text-destructive text-center">{passphraseError}</p>
             )}
-            <button
+            <Button
               onClick={handlePassphraseSubmit}
               disabled={unlocking || !passphraseInput}
-              className="w-full py-3 px-6 bg-whispr-accent hover:bg-whispr-accent/90 disabled:opacity-50
-                         rounded-lg text-white font-medium transition-all duration-200
-                         focus:outline-none focus:ring-2 focus:ring-whispr-accent/50"
+              className="w-full h-11"
             >
               {unlocking ? "Decrypting..." : "Enter Room"}
-            </button>
+            </Button>
           </div>
         </div>
       </main>
     );
   }
 
+  // --- Invalid link screen ---
   if (!cryptoKey) {
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
+      <main className="min-h-[100dvh] flex items-center justify-center px-4">
         <div className="text-center space-y-3">
-          <h2 className="text-xl font-medium">Invalid room link</h2>
-          <p className="text-whispr-muted text-sm">
+          <h2 className="text-xl font-medium tracking-tight">Invalid room link</h2>
+          <p className="text-sm text-muted-foreground">
             The encryption key is missing from the URL. Ask for a new link.
           </p>
         </div>
@@ -459,108 +698,197 @@ export default function RoomPage() {
     );
   }
 
+  // --- Main room UI ---
   return (
-    <main className="h-screen flex flex-col">
+    <main className="h-[100dvh] flex flex-col">
       {/* Header */}
-      <header className="flex-shrink-0 border-b border-whispr-border bg-whispr-surface/50 backdrop-blur px-4 py-3">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold">whispr</h1>
+      <header className="flex-shrink-0 border-b border-border px-3 sm:px-4 py-2.5 sm:py-3">
+        <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="text-base font-semibold tracking-tight shrink-0">whispr</span>
             <StatusBadge state={connectionState} />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {inCall && (
+              <div className="items-center gap-1.5 text-xs text-whispr-red hidden sm:flex">
+                <span className="w-1.5 h-1.5 rounded-full bg-whispr-red animate-pulse" />
+                <Video className="w-3.5 h-3.5" />
+              </div>
+            )}
             {isPassphraseProtected && (
-              <span className="text-[10px] px-2 py-1 rounded-full bg-whispr-accent/10 text-whispr-accent flex items-center gap-1">
-                🔐 Passphrase
-              </span>
+              <Lock className="w-3.5 h-3.5 text-muted-foreground hidden sm:block" />
             )}
             {isCreator && connectionState === "waiting" && (
-              <button
-                onClick={copyLink}
-                className="text-xs px-3 py-1.5 rounded-md bg-whispr-accent/20 text-whispr-accent
-                           hover:bg-whispr-accent/30 transition-colors"
-              >
-                {linkCopied ? "Copied!" : "Copy Link"}
-              </button>
+              <Button variant="ghost" size="sm" onClick={copyLink} className="gap-1.5">
+                {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span className="hidden sm:inline">{linkCopied ? "Copied" : "Copy Link"}</span>
+              </Button>
             )}
-            <button
+            {connectionState === "disconnected" && (
+              <Button variant="ghost" size="sm" onClick={reconnect} className="gap-1.5">
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Reconnect</span>
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setShowWarning(true)}
-              className="text-xs px-3 py-1.5 rounded-md bg-whispr-red/10 text-whispr-red
-                         hover:bg-whispr-red/20 transition-colors"
+              className="gap-1.5 text-whispr-red hover:text-whispr-red hover:bg-whispr-red/10"
             >
-              Leave
-            </button>
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Leave</span>
+            </Button>
           </div>
         </div>
       </header>
 
-      {/* Privacy badge */}
-      <div className="flex-shrink-0 flex justify-center py-2">
-        <div className="flex items-center gap-1.5 text-[10px] text-whispr-muted">
-          <LockIcon />
-          <span>End-to-end encrypted &bull; P2P &bull; Zero server storage</span>
+      {/* Video call area */}
+      {inCall && (
+        <div className="flex-shrink-0 px-3 sm:px-4 py-2">
+          <div className="max-w-2xl mx-auto relative rounded-xl overflow-hidden bg-black aspect-video">
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="w-full h-full object-cover"
+            />
+            {!remoteStream && (
+              <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
+                Waiting for peer video...
+              </div>
+            )}
+            {/* Local PiP */}
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute bottom-3 right-3 w-24 sm:w-32 aspect-video rounded-lg object-cover border border-white/10 bg-black"
+            />
+            {/* Pill-shaped controls toolbar */}
+            <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur-md rounded-full p-1.5">
+              <button
+                onClick={toggleAudio}
+                className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
+                  audioEnabled ? "text-white hover:bg-white/10" : "bg-whispr-red text-white"
+                )}
+              >
+                {audioEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={toggleVideo}
+                className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
+                  videoEnabled ? "text-white hover:bg-white/10" : "bg-whispr-red text-white"
+                )}
+              >
+                {videoEnabled ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={captureAndSendPhoto}
+                className="w-10 h-10 rounded-full flex items-center justify-center text-white hover:bg-white/10 transition-colors"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+              <button
+                onClick={stopVideoCall}
+                className="w-10 h-10 rounded-full flex items-center justify-center bg-whispr-red text-white hover:bg-whispr-red/80 transition-colors"
+              >
+                <PhoneOff className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
-        <div className="max-w-2xl mx-auto space-y-3 pt-2">
+      {/* Messages area */}
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 pb-4 scroll-smooth overscroll-contain">
+        <div className="max-w-2xl mx-auto space-y-3 pt-4">
+          {/* Waiting state */}
           {connectionState === "waiting" && (
-            <div className="text-center py-12 space-y-4 animate-fade-in">
-              <div className="text-whispr-muted animate-pulse-glow">
+            <div className="flex flex-col items-center justify-center py-20 space-y-4 animate-fade-in">
+              <p className="text-sm text-muted-foreground animate-pulse-glow">
                 Waiting for peer to join...
-              </div>
-              <div className="text-xs text-whispr-muted/60">
+              </p>
+              {isCreator && (
+                <Button variant="ghost" size="sm" onClick={copyLink} className="gap-1.5">
+                  {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {linkCopied ? "Link copied" : "Copy room link"}
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground/50 max-w-xs text-center">
                 Share the link to invite someone. The encryption key is embedded in the URL.
-              </div>
+              </p>
             </div>
           )}
 
+          {/* Connecting state */}
           {connectionState === "connecting" && (
-            <div className="text-center py-12 animate-fade-in">
-              <div className="text-whispr-amber">Establishing secure connection...</div>
+            <div className="flex items-center justify-center py-20 animate-fade-in">
+              <span className="text-sm text-whispr-amber">Establishing secure connection...</span>
             </div>
           )}
 
+          {/* Connected, no messages yet */}
           {connectionState === "connected" && messages.length === 0 && (
-            <div className="text-center py-12 animate-fade-in">
-              <div className="text-whispr-green mb-2">Connected securely</div>
-              <div className="text-xs text-whispr-muted">
-                Messages are encrypted end-to-end and will vanish when you close this tab.
+            <div className="flex flex-col items-center justify-center py-20 animate-fade-in">
+              <div className="flex items-center gap-2 text-sm text-whispr-green mb-2">
+                <Lock className="w-3.5 h-3.5" />
+                Connected securely
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Messages are end-to-end encrypted and vanish when you close this tab.
+              </p>
+            </div>
+          )}
+
+          {/* Disconnected state */}
+          {connectionState === "disconnected" && (
+            <div className="flex flex-col items-center justify-center py-20 space-y-4 animate-fade-in">
+              <p className="text-sm text-muted-foreground">Connection ended</p>
+              <div className="flex gap-3">
+                <Button onClick={reconnect} className="gap-1.5">
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reconnect
+                </Button>
+                <Button variant="ghost" onClick={() => setShowWarning(true)}>
+                  Leave
+                </Button>
               </div>
             </div>
           )}
 
-          {connectionState === "disconnected" && (
-            <div className="text-center py-4 animate-fade-in">
-              <div className="text-whispr-red text-sm">Peer disconnected</div>
-            </div>
-          )}
-
+          {/* Message list */}
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`flex ${msg.sender === "me" ? "justify-end" : "justify-start"} animate-fade-in`}
+              className={cn(
+                "flex animate-fade-in",
+                msg.sender === "me" ? "justify-end" : "justify-start"
+              )}
             >
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${
+                className={cn(
+                  "max-w-[80%] rounded-2xl px-4 py-2.5",
                   msg.sender === "me"
-                    ? "bg-whispr-accent text-white rounded-br-sm"
-                    : "bg-whispr-surface border border-whispr-border rounded-bl-sm"
-                }`}
+                    ? "bg-primary text-primary-foreground rounded-br-md"
+                    : "bg-card border border-border rounded-bl-md"
+                )}
               >
                 {msg.type === "text" && (
                   <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
                 )}
 
                 {msg.type === "image" && msg.fileUrl && (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <img
                       src={msg.fileUrl}
                       alt={msg.fileName}
-                      className="max-w-full rounded-lg max-h-64 object-contain"
+                      className="max-w-full rounded-lg max-h-64 object-contain w-auto h-auto"
                     />
-                    <p className="text-xs opacity-70">{msg.fileName}</p>
+                    <p className="text-xs opacity-60 break-all">{msg.fileName}</p>
                   </div>
                 )}
 
@@ -570,7 +898,7 @@ export default function RoomPage() {
                     download={msg.fileName}
                     className="flex items-center gap-2 text-sm hover:underline"
                   >
-                    <FileIcon />
+                    <FileIcon className="w-4 h-4 shrink-0" />
                     <div>
                       <div className="break-all">{msg.fileName}</div>
                       <div className="text-xs opacity-60">
@@ -581,9 +909,12 @@ export default function RoomPage() {
                 )}
 
                 <div
-                  className={`text-[10px] mt-1 ${
-                    msg.sender === "me" ? "text-white/50" : "text-whispr-muted"
-                  }`}
+                  className={cn(
+                    "text-[10px] mt-1",
+                    msg.sender === "me"
+                      ? "text-primary-foreground/50"
+                      : "text-muted-foreground"
+                  )}
                 >
                   {formatTime(msg.timestamp)}
                 </div>
@@ -594,9 +925,12 @@ export default function RoomPage() {
         </div>
       </div>
 
-      {/* Input */}
-      <div className="flex-shrink-0 border-t border-whispr-border bg-whispr-surface/50 backdrop-blur px-4 py-3">
-        <div className="max-w-2xl mx-auto flex gap-2">
+      {/* Input bar */}
+      <div
+        className="flex-shrink-0 border-t border-border px-3 sm:px-4 py-2.5 sm:py-3"
+        style={{ paddingBottom: "max(0.625rem, env(safe-area-inset-bottom))" }}
+      >
+        <div className="max-w-2xl mx-auto flex items-center gap-1.5 sm:gap-2">
           <input
             type="file"
             ref={fileInputRef}
@@ -607,16 +941,24 @@ export default function RoomPage() {
               e.target.value = "";
             }}
           />
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => fileInputRef.current?.click()}
             disabled={connectionState !== "connected"}
-            className="flex-shrink-0 p-2.5 rounded-lg bg-whispr-border hover:bg-whispr-border/80
-                       disabled:opacity-30 transition-colors"
-            title="Send file"
           >
-            <PaperclipIcon />
-          </button>
-          <input
+            <Paperclip className="w-4 h-4" />
+          </Button>
+          {!inCall && connectionState === "connected" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={startVideoCall}
+            >
+              <Video className="w-4 h-4" />
+            </Button>
+          )}
+          <Input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -627,42 +969,42 @@ export default function RoomPage() {
                 : "Waiting for connection..."
             }
             disabled={connectionState !== "connected"}
-            className="flex-1 bg-whispr-bg border border-whispr-border rounded-lg px-4 py-2.5 text-sm
-                       placeholder:text-whispr-muted/50 focus:outline-none focus:border-whispr-accent/50
-                       disabled:opacity-30 transition-colors"
+            autoComplete="off"
+            className="flex-1 h-11"
           />
-          <button
+          <Button
+            size="icon"
             onClick={sendMessage}
             disabled={connectionState !== "connected" || !input.trim()}
-            className="flex-shrink-0 p-2.5 rounded-lg bg-whispr-accent hover:bg-whispr-accent/90
-                       disabled:opacity-30 transition-colors"
           >
-            <SendIcon />
-          </button>
+            <Send className="w-4 h-4" />
+          </Button>
         </div>
       </div>
 
       {/* Leave warning modal */}
       {showWarning && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
-          <div className="bg-whispr-surface border border-whispr-border rounded-xl p-6 max-w-sm w-full space-y-4 animate-fade-in">
-            <h3 className="text-lg font-medium">Leave room?</h3>
-            <p className="text-sm text-whispr-muted">
-              Messages cannot be recovered after closing this tab. All chat history will be permanently destroyed.
+          <div className="bg-card border border-border rounded-xl p-6 max-w-sm w-full space-y-4 animate-fade-in">
+            <h3 className="text-lg font-medium tracking-tight">Leave room?</h3>
+            <p className="text-sm text-muted-foreground">
+              All messages will be permanently destroyed. This cannot be undone.
             </p>
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="ghost"
+                className="flex-1"
                 onClick={() => setShowWarning(false)}
-                className="flex-1 py-2 rounded-lg border border-whispr-border text-sm hover:bg-whispr-border/50 transition-colors"
               >
                 Stay
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1"
                 onClick={() => window.close()}
-                className="flex-1 py-2 rounded-lg bg-whispr-red text-white text-sm hover:bg-whispr-red/90 transition-colors"
               >
                 Leave & Destroy
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -673,67 +1015,23 @@ export default function RoomPage() {
 
 function StatusBadge({ state }: { state: ConnectionState }) {
   const config = {
-    idle: { color: "text-whispr-muted", bg: "bg-whispr-muted/10", label: "Initializing" },
-    waiting: { color: "text-whispr-amber", bg: "bg-whispr-amber/10", label: "Waiting for peer..." },
-    connecting: { color: "text-whispr-amber", bg: "bg-whispr-amber/10", label: "Connecting..." },
-    connected: { color: "text-whispr-green", bg: "bg-whispr-green/10", label: "Connected \uD83D\uDD12" },
-    disconnected: { color: "text-whispr-red", bg: "bg-whispr-red/10", label: "Peer disconnected" },
+    idle: { dotColor: "bg-muted-foreground", label: "Initializing" },
+    waiting: { dotColor: "bg-whispr-amber", label: "Waiting" },
+    connecting: { dotColor: "bg-whispr-amber", label: "Connecting" },
+    connected: { dotColor: "bg-whispr-green", label: "Connected" },
+    disconnected: { dotColor: "bg-whispr-red", label: "Disconnected" },
   }[state];
 
   return (
-    <span className={`text-xs px-2 py-1 rounded-full ${config.color} ${config.bg}`}>
+    <Badge variant="outline" className="gap-1.5 font-normal py-1">
+      <span
+        className={cn(
+          "w-1.5 h-1.5 rounded-full",
+          config.dotColor,
+          (state === "waiting" || state === "connecting") && "animate-pulse"
+        )}
+      />
       {config.label}
-    </span>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </svg>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m22 2-7 20-4-9-9-4Z" />
-      <path d="M22 2 11 13" />
-    </svg>
-  );
-}
-
-function PaperclipIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-    </svg>
-  );
-}
-
-function ShieldLockIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-         className="text-whispr-accent">
-      <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
-      <rect width="8" height="5" x="8" y="11" rx="1" />
-      <path d="M10 11V9a2 2 0 1 1 4 0v2" />
-    </svg>
+    </Badge>
   );
 }

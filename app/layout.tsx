@@ -1,10 +1,47 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { Inter } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "Whispr — Encrypted P2P Chat",
+  title: "whispr — Private P2P Messaging",
   description:
-    "Privacy-first, peer-to-peer encrypted ephemeral chat. No servers, no logs, no traces.",
+    "End-to-end encrypted, peer-to-peer messaging. No servers, no logs, no accounts. Your messages vanish when you close the tab.",
+  keywords: [
+    "private messaging",
+    "encrypted chat",
+    "p2p",
+    "anonymous",
+    "secure",
+  ],
+  openGraph: {
+    title: "whispr",
+    description:
+      "End-to-end encrypted P2P messaging. No servers, no logs.",
+    type: "website",
+    url: "https://whispr.pakhale.com",
+  },
+  twitter: {
+    card: "summary",
+    title: "whispr",
+    description:
+      "End-to-end encrypted P2P messaging. No servers, no logs.",
+  },
+  metadataBase: new URL("https://whispr.pakhale.com"),
+  robots: { index: true, follow: true },
+  icons: {
+    icon: "/favicon.png",
+    apple: "/apple-touch-icon.png",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#0a0a0a",
 };
 
 export default function RootLayout({
@@ -13,14 +50,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body className="bg-whispr-bg text-whispr-text font-mono antialiased min-h-screen">
+    <html lang="en" className={cn("dark", inter.variable)}>
+      <body className="antialiased min-h-screen">
         {children}
       </body>
     </html>
