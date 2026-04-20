@@ -182,36 +182,19 @@ export default function RoomPage() {
 
   const startConnection = useCallback(
     async (key: CryptoKey) => {
+      const searchParams = new URLSearchParams(window.location.search);
+      const isCreatorRole = searchParams.get("role") === "creator";
+      setIsCreator(isCreatorRole);
+
       const callbacks: PeerCallbacks = {
         onMessage: handlePeerMessage,
         onBinaryMessage: handleBinaryMessage,
         onStateChange: setConnectionState,
       };
 
-      const existingOffer = await pollSignal(roomId, "offer");
-
-      if (existingOffer) {
-        // Joiner flow
-        setIsCreator(false);
-        setConnectionState("connecting");
-
-        const pc = createPeerConnection(callbacks);
-        pcRef.current = pc;
-
-        pc.ondatachannel = (e) => {
-          dcRef.current = e.channel;
-          setupDataChannel(e.channel, callbacks);
-        };
-
-        const offerData = JSON.parse(await decrypt(key, existingOffer));
-        const answer = await createAnswer(pc, offerData);
-        const encryptedAnswer = await encrypt(key, JSON.stringify(answer));
-        await sendSignal(roomId, "answer", encryptedAnswer);
-      } else {
-        // Creator flow
-        setIsCreator(true);
+      if (isCreatorRole) {
+        // Creator: make offer immediately, poll for answer
         setConnectionState("waiting");
-
         const pc = createPeerConnection(callbacks);
         pcRef.current = pc;
         dcRef.current = createDataChannel(pc, callbacks);
@@ -220,16 +203,50 @@ export default function RoomPage() {
         const encryptedOffer = await encrypt(key, JSON.stringify(offer));
         await sendSignal(roomId, "offer", encryptedOffer);
 
+        let attempts = 0;
         pollRef.current = setInterval(async () => {
+          attempts++;
+          if (attempts > 60) {
+            clearInterval(pollRef.current!);
+            return;
+          }
           const answerData = await pollSignal(roomId, "answer");
           if (answerData) {
-            if (pollRef.current) clearInterval(pollRef.current);
+            clearInterval(pollRef.current!);
             pollRef.current = null;
             setConnectionState("connecting");
             const decryptedAnswer = JSON.parse(await decrypt(key, answerData));
             await acceptAnswer(pc, decryptedAnswer);
           }
-        }, 1000);
+        }, 1500);
+      } else {
+        // Joiner: poll for offer, then answer
+        setConnectionState("waiting");
+        const pc = createPeerConnection(callbacks);
+        pcRef.current = pc;
+        pc.ondatachannel = (e) => {
+          dcRef.current = e.channel;
+          setupDataChannel(e.channel, callbacks);
+        };
+
+        let attempts = 0;
+        pollRef.current = setInterval(async () => {
+          attempts++;
+          if (attempts > 60) {
+            clearInterval(pollRef.current!);
+            return;
+          }
+          const offerData = await pollSignal(roomId, "offer");
+          if (offerData) {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setConnectionState("connecting");
+            const decryptedOffer = JSON.parse(await decrypt(key, offerData));
+            const answer = await createAnswer(pc, decryptedOffer);
+            const encryptedAnswer = await encrypt(key, JSON.stringify(answer));
+            await sendSignal(roomId, "answer", encryptedAnswer);
+          }
+        }, 1500);
       }
     },
     [roomId, handlePeerMessage, handleBinaryMessage]
@@ -360,7 +377,9 @@ export default function RoomPage() {
   }
 
   function copyLink() {
-    navigator.clipboard.writeText(window.location.href);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("role");
+    navigator.clipboard.writeText(url.toString());
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
   }

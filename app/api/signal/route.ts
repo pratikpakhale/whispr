@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     const store = await getStore();
     const key = `whispr:${roomId}:${role}`;
-    await store!.set(key, data, { ex: 120 });
+    await store!.set(key, data, { ex: 300 });
 
     return NextResponse.json({ ok: true });
   } catch {

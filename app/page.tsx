@@ -40,7 +40,7 @@ export default function Home() {
         fragment = await exportKey(key);
       }
 
-      router.push(`/room/${roomId}#${fragment}`);
+      router.push(`/room/${roomId}?role=creator#${fragment}`);
     } catch {
       setCreating(false);
     }
