@@ -641,7 +641,6 @@ export default function RoomPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  // --- Passphrase screen ---
   if (needsPassphrase) {
     return (
       <main className="min-h-[100dvh] flex items-center justify-center px-4">
@@ -674,7 +673,7 @@ export default function RoomPage() {
             <Button
               onClick={handlePassphraseSubmit}
               disabled={unlocking || !passphraseInput}
-              className="w-full h-11"
+              className="w-full h-11 min-h-[44px]"
             >
               {unlocking ? "Decrypting..." : "Enter Room"}
             </Button>
@@ -684,7 +683,6 @@ export default function RoomPage() {
     );
   }
 
-  // --- Invalid link screen ---
   if (!cryptoKey) {
     return (
       <main className="min-h-[100dvh] flex items-center justify-center px-4">
@@ -698,14 +696,16 @@ export default function RoomPage() {
     );
   }
 
-  // --- Main room UI ---
   return (
     <main className="h-[100dvh] flex flex-col">
       {/* Header */}
-      <header className="flex-shrink-0 border-b border-border px-3 sm:px-4 py-2.5 sm:py-3">
+      <header
+        className="flex-shrink-0 border-b border-border px-3 sm:px-4 py-2.5 sm:py-3 select-none"
+        style={{ paddingTop: "max(0.625rem, env(safe-area-inset-top))" }}
+      >
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
-            <span className="text-base font-semibold tracking-tight shrink-0">whispr</span>
+            <span className="text-base font-semibold tracking-tight shrink-0 hidden min-[360px]:inline">whispr</span>
             <StatusBadge state={connectionState} />
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -719,13 +719,13 @@ export default function RoomPage() {
               <Lock className="w-3.5 h-3.5 text-muted-foreground hidden sm:block" />
             )}
             {isCreator && connectionState === "waiting" && (
-              <Button variant="ghost" size="sm" onClick={copyLink} className="gap-1.5">
+              <Button variant="ghost" size="sm" onClick={copyLink} className="gap-1.5 min-h-[44px] min-w-[44px]">
                 {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span className="hidden sm:inline">{linkCopied ? "Copied" : "Copy Link"}</span>
               </Button>
             )}
             {connectionState === "disconnected" && (
-              <Button variant="ghost" size="sm" onClick={reconnect} className="gap-1.5">
+              <Button variant="ghost" size="sm" onClick={reconnect} className="gap-1.5 min-h-[44px] min-w-[44px]">
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Reconnect</span>
               </Button>
@@ -734,7 +734,7 @@ export default function RoomPage() {
               variant="ghost"
               size="sm"
               onClick={() => setShowWarning(true)}
-              className="gap-1.5 text-whispr-red hover:text-whispr-red hover:bg-whispr-red/10"
+              className="gap-1.5 min-h-[44px] min-w-[44px] text-whispr-red hover:text-whispr-red hover:bg-whispr-red/10"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Leave</span>
@@ -747,10 +747,12 @@ export default function RoomPage() {
       {inCall && (
         <div className="flex-shrink-0 px-3 sm:px-4 py-2">
           <div className="max-w-2xl mx-auto relative rounded-xl overflow-hidden bg-black aspect-video">
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
+              webkit-playsinline=""
               className="w-full h-full object-cover"
             />
             {!remoteStream && (
@@ -759,52 +761,65 @@ export default function RoomPage() {
               </div>
             )}
             {/* Local PiP */}
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
             <video
               ref={localVideoRef}
               autoPlay
               playsInline
+              webkit-playsinline=""
               muted
               className="absolute bottom-3 right-3 w-24 sm:w-32 aspect-video rounded-lg object-cover border border-white/10 bg-black"
             />
             {/* Pill-shaped controls toolbar */}
-            <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur-md rounded-full p-1.5">
-              <button
+            <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur-md rounded-full p-1.5 select-none">
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={toggleAudio}
                 className={cn(
-                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
-                  audioEnabled ? "text-white hover:bg-white/10" : "bg-whispr-red text-white"
+                  "w-11 h-11 min-w-[44px] min-h-[44px] rounded-full border-none",
+                  audioEnabled ? "text-white hover:bg-white/10" : "bg-whispr-red text-white hover:bg-whispr-red/80"
                 )}
               >
-                {audioEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-              </button>
-              <button
+                {audioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={toggleVideo}
                 className={cn(
-                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
-                  videoEnabled ? "text-white hover:bg-white/10" : "bg-whispr-red text-white"
+                  "w-11 h-11 min-w-[44px] min-h-[44px] rounded-full border-none",
+                  videoEnabled ? "text-white hover:bg-white/10" : "bg-whispr-red text-white hover:bg-whispr-red/80"
                 )}
               >
-                {videoEnabled ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
-              </button>
-              <button
+                {videoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={captureAndSendPhoto}
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white hover:bg-white/10 transition-colors"
+                className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full border-none text-white hover:bg-white/10"
               >
-                <Camera className="w-4 h-4" />
-              </button>
-              <button
+                <Camera className="w-5 h-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={stopVideoCall}
-                className="w-10 h-10 rounded-full flex items-center justify-center bg-whispr-red text-white hover:bg-whispr-red/80 transition-colors"
+                className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full border-none bg-whispr-red text-white hover:bg-whispr-red/80"
               >
-                <PhoneOff className="w-4 h-4" />
-              </button>
+                <PhoneOff className="w-5 h-5" />
+              </Button>
             </div>
           </div>
         </div>
       )}
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-4 pb-4 scroll-smooth overscroll-contain">
+      <div
+        className="flex-1 overflow-y-auto px-3 sm:px-4 pb-4 scroll-smooth overscroll-contain"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
         <div className="max-w-2xl mx-auto space-y-3 pt-4">
           {/* Waiting state */}
           {connectionState === "waiting" && (
@@ -927,8 +942,8 @@ export default function RoomPage() {
 
       {/* Input bar */}
       <div
-        className="flex-shrink-0 border-t border-border px-3 sm:px-4 py-2.5 sm:py-3"
-        style={{ paddingBottom: "max(0.625rem, env(safe-area-inset-bottom))" }}
+        className="flex-shrink-0 border-t border-border px-3 sm:px-4 py-2.5 sm:py-3 select-none"
+        style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}
       >
         <div className="max-w-2xl mx-auto flex items-center gap-1.5 sm:gap-2">
           <input
@@ -946,6 +961,7 @@ export default function RoomPage() {
             size="icon"
             onClick={() => fileInputRef.current?.click()}
             disabled={connectionState !== "connected"}
+            className="min-w-[44px] min-h-[44px]"
           >
             <Paperclip className="w-4 h-4" />
           </Button>
@@ -954,6 +970,7 @@ export default function RoomPage() {
               variant="ghost"
               size="icon"
               onClick={startVideoCall}
+              className="min-w-[44px] min-h-[44px]"
             >
               <Video className="w-4 h-4" />
             </Button>
@@ -976,6 +993,7 @@ export default function RoomPage() {
             size="icon"
             onClick={sendMessage}
             disabled={connectionState !== "connected" || !input.trim()}
+            className="min-w-[44px] min-h-[44px]"
           >
             <Send className="w-4 h-4" />
           </Button>
@@ -993,14 +1011,14 @@ export default function RoomPage() {
             <div className="flex gap-3">
               <Button
                 variant="ghost"
-                className="flex-1"
+                className="flex-1 min-h-[44px]"
                 onClick={() => setShowWarning(false)}
               >
                 Stay
               </Button>
               <Button
                 variant="destructive"
-                className="flex-1"
+                className="flex-1 min-h-[44px]"
                 onClick={() => window.close()}
               >
                 Leave & Destroy

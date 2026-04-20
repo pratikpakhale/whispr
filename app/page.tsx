@@ -50,10 +50,10 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-[100dvh] flex flex-col items-center justify-center px-4 py-8">
+    <main className="min-h-[100dvh] flex flex-col items-center justify-center px-5 py-6">
       <div className="max-w-md w-full space-y-12 text-center">
         <div className="space-y-4">
-          <h1 className="text-5xl sm:text-6xl font-semibold tracking-tight">
+          <h1 className="text-3xl sm:text-5xl md:text-6xl font-semibold tracking-tight">
             whispr
           </h1>
           <p className="text-muted-foreground text-base leading-relaxed max-w-sm mx-auto">
@@ -109,13 +109,16 @@ export default function Home() {
           <Button
             onClick={handleCreate}
             disabled={creating || (usePassphrase && passphrase.length < 1)}
-            className="w-full h-12 text-sm font-medium"
+            className="w-full h-12 text-sm font-medium min-h-[44px]"
           >
             {creating ? "Creating room..." : "Create a private room"}
           </Button>
         </div>
 
-        <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+        <div
+          className="flex items-center justify-center gap-2 text-xs text-muted-foreground flex-wrap"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
           <Lock className="w-3 h-3" />
           <span>E2E encrypted · P2P · No accounts · No logs</span>
         </div>

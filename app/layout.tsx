@@ -41,6 +41,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
   themeColor: "#0a0a0a",
 };
 
@@ -51,7 +52,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={cn("dark", inter.variable)}>
-      <body className="antialiased min-h-screen">
+      <body className="antialiased min-h-[100dvh]">
         {children}
       </body>
     </html>

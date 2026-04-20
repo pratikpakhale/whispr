@@ -2,6 +2,7 @@ const ALGO = "AES-GCM";
 const KEY_LENGTH = 256;
 const IV_LENGTH = 12;
 
+/** Generates a random AES-256-GCM encryption key. */
 export async function generateKey(): Promise<CryptoKey> {
   return crypto.subtle.generateKey(
     { name: ALGO, length: KEY_LENGTH },
@@ -10,11 +11,13 @@ export async function generateKey(): Promise<CryptoKey> {
   );
 }
 
+/** Exports a CryptoKey to a base64-encoded string for URL embedding. */
 export async function exportKey(key: CryptoKey): Promise<string> {
   const raw = await crypto.subtle.exportKey("raw", key);
   return bufferToBase64(raw);
 }
 
+/** Imports a CryptoKey from a base64-encoded string. */
 export async function importKey(base64: string): Promise<CryptoKey> {
   const raw = base64ToBuffer(base64);
   return crypto.subtle.importKey("raw", raw, { name: ALGO }, false, [
@@ -23,6 +26,7 @@ export async function importKey(base64: string): Promise<CryptoKey> {
   ]);
 }
 
+/** Encrypts a string with AES-GCM and returns a base64 string (IV prepended). */
 export async function encrypt(
   key: CryptoKey,
   plaintext: string
@@ -40,6 +44,7 @@ export async function encrypt(
   return bufferToBase64(combined.buffer);
 }
 
+/** Decrypts a base64 AES-GCM ciphertext (IV prepended) back to a string. */
 export async function decrypt(
   key: CryptoKey,
   data: string
@@ -55,6 +60,7 @@ export async function decrypt(
   return new TextDecoder().decode(decrypted);
 }
 
+/** Encrypts a binary buffer with AES-GCM, returning IV + ciphertext. */
 export async function encryptBuffer(
   key: CryptoKey,
   data: ArrayBuffer
@@ -71,6 +77,7 @@ export async function encryptBuffer(
   return combined.buffer;
 }
 
+/** Decrypts a binary buffer (IV + ciphertext) back to plaintext bytes. */
 export async function decryptBuffer(
   key: CryptoKey,
   data: ArrayBuffer
@@ -81,10 +88,9 @@ export async function decryptBuffer(
   return crypto.subtle.decrypt({ name: ALGO, iv }, key, ciphertext);
 }
 
-// --- Passphrase protection ---
-
 const PBKDF2_ITERATIONS = 200_000;
 
+/** Derives an AES-256-GCM key from a passphrase using PBKDF2 (200k iterations). */
 export async function deriveKeyFromPassphrase(
   passphrase: string,
   salt: Uint8Array
@@ -106,6 +112,7 @@ export async function deriveKeyFromPassphrase(
   );
 }
 
+/** Encrypts a room key with a passphrase-derived key, returning a base64url string. */
 export async function encryptRoomKey(
   roomKey: CryptoKey,
   passphraseKey: CryptoKey
@@ -123,6 +130,7 @@ export async function encryptRoomKey(
   return bufferToBase64url(combined.buffer);
 }
 
+/** Decrypts an encrypted room key using a passphrase-derived key. */
 export async function decryptRoomKey(
   encryptedKey: string,
   passphraseKey: CryptoKey
@@ -140,8 +148,6 @@ export async function decryptRoomKey(
     "decrypt",
   ]);
 }
-
-// --- Base64url helpers (URL-safe, no padding) ---
 
 function bufferToBase64url(buffer: ArrayBuffer): string {
   return bufferToBase64(buffer)

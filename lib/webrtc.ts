@@ -3,6 +3,7 @@ const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
+/** Fetches TURN/STUN servers from the API, falling back to public STUN. */
 export async function getIceServers(): Promise<RTCIceServer[]> {
   try {
     const res = await fetch("/api/turn");
@@ -35,6 +36,7 @@ export interface PeerCallbacks {
   onStateChange: (state: ConnectionState) => void;
 }
 
+/** Creates an RTCPeerConnection with ICE servers and failure detection. */
 export function createPeerConnection(
   callbacks: PeerCallbacks,
   iceServers: RTCIceServer[]
@@ -56,6 +58,7 @@ export function createPeerConnection(
   return pc;
 }
 
+/** Creates an ordered data channel named "whispr" on the peer connection. */
 export function createDataChannel(
   pc: RTCPeerConnection,
   callbacks: PeerCallbacks
@@ -66,6 +69,7 @@ export function createDataChannel(
   return dc;
 }
 
+/** Wires up message, open, and close handlers on an existing data channel. */
 export function setupDataChannel(
   dc: RTCDataChannel,
   callbacks: PeerCallbacks
@@ -82,6 +86,7 @@ export function setupDataChannel(
   dc.onclose = () => callbacks.onStateChange("disconnected");
 }
 
+/** Creates an SDP offer and waits for ICE gathering to complete. */
 export async function createOffer(
   pc: RTCPeerConnection
 ): Promise<RTCSessionDescriptionInit> {
@@ -91,6 +96,7 @@ export async function createOffer(
   return pc.localDescription!;
 }
 
+/** Applies a remote offer and creates an SDP answer. */
 export async function createAnswer(
   pc: RTCPeerConnection,
   offer: RTCSessionDescriptionInit
@@ -102,6 +108,7 @@ export async function createAnswer(
   return pc.localDescription!;
 }
 
+/** Applies a remote SDP answer to complete the signaling handshake. */
 export async function acceptAnswer(
   pc: RTCPeerConnection,
   answer: RTCSessionDescriptionInit
@@ -109,6 +116,7 @@ export async function acceptAnswer(
   await pc.setRemoteDescription(new RTCSessionDescription(answer));
 }
 
+/** Adds all tracks from a media stream to the peer connection. */
 export function addMediaStream(
   pc: RTCPeerConnection,
   stream: MediaStream
@@ -118,6 +126,7 @@ export function addMediaStream(
   }
 }
 
+/** Stops and removes all media tracks from the peer connection. */
 export function removeMediaTracks(pc: RTCPeerConnection): void {
   for (const sender of pc.getSenders()) {
     if (sender.track) {
@@ -127,6 +136,7 @@ export function removeMediaTracks(pc: RTCPeerConnection): void {
   }
 }
 
+/** Sets up automatic renegotiation when tracks are added/removed. */
 export function setupRenegotiation(
   pc: RTCPeerConnection,
   onOffer: (offer: RTCSessionDescriptionInit) => void
